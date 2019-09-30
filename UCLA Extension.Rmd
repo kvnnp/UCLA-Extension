@@ -1,0 +1,338 @@
+---
+title: "UCLA Extension"
+author: "Kevin Pham"
+date: "9/23/2019"
+output: html_document
+---
+
+Libraries
+```{r}
+library(tidyverse)
+library(lubridate)
+```
+
+
+Question One 
+Are there identifiable patterns/trends in our student profiles in terms of
+- age, gender, national origin
+- academic & professional background
+- goals after they study at ALC
+- English proficiency when students enter the program
+
+We are given 22 different Excel files, but we only need a few of them to answer our questions.
+
+7 files: Elective_Preferences_Advanced/Intermediate
+3 files: Market_Results
+2 files: Placement
+8 files: Program_Evaluations
+1 file: Dashboard
+1 file: Enrollment
+
+What is the difference between Dashboard_24_encrpyt and Enrollment_57_encrypt?
+
+Files we will be working with:
+
+
+# Recoding Enrollment data
+```{r}
+enrollment <- read_csv("Enrollment_57_encrypt.csv")
+dim(enrollment) # 49 variables, yikes
+
+# Replace NULL with NA for important variables
+enrollment$Age <- str_replace(enrollment$Age, "NULL", NA_character_)
+enrollment$Gender <- str_replace(enrollment$Gender, "NULL", NA_character_)
+
+# Can students be recorded more than once per quarter?
+enrollment %>% group_by(Quarter) %>% summarize(unique_id = length(unique(`_Student_Number_`)), total_id = length(`_Student_Number_`), difference = total_id - unique_id) # students are NOT recorded more than once a quarter
+
+# Recoding Quarter so we can plot it in Tableau
+enrollment$quarter_date <- recode(enrollment$Quarter,
+       "2016Fall" = "October 1, 2016",
+       "2016Spring" = "January 1, 2016",
+       "2016SummerC" = "August 1, 2016",
+       "2017Fall" = "October 1, 2017",
+       "2017Spring" = "April 1, 2017",
+       "2017SummerA" = "July 31, 2017",
+       "2017SummerB" = "July 31, 2017",
+       "2017SummerC" = "August 1, 2017",
+       "2017Winter" = "January 1, 2017",
+       "2018Fall" = "October 1, 2018",
+       "2018SummerA" = "July 31, 2018",
+       "2018SummerB" = "July 31, 2018",
+       "2018SummerC" = "August 1, 2018",
+       "2018Winter" = "January 1, 2018"
+       )
+unique(enrollment$Quarter)
+
+# Classifying countries by region: MiddleEast, Asia, Europe, LatinAmerica, Africa
+middleEast <- c("Iraq", "Turkey", "Qatar", "Saudi Arabia", "United Arab Emirates", "Kuwait", "Iran")
+asia <- c("Kazakhstan", "Uzbekistan", "India", "Hong Kong", "Japan", "Thailand", "China (Peoples Republic)", "Vietnam", "Taiwan", "Mongolia", "Korea, South", "Indonesia")
+europe <- c("Norway", "France", "Spain", "Hungary", "Poland", "Georgia", "Germany", "Portugal", "Russia", "Ukraine", "Czech Republic", "Italy", "Iceland", "Switzerland")
+latinAmerica <- c("Mexico", "Bolivia", "Panama", "Dominican Republic", "Brazil", "Argentina", "Chile", "Peru", "Venezuela", "Colombia")
+africa <- c("Rwanda", "Sudan", "Morocco", "Algeria", "Tunisia")
+
+clean_paste <- function(x) {paste(x, collapse = "|")} # function to paste according to str_detect() format
+
+enrollment$region <- enrollment$`_Country_of_Citizenship_`
+enrollment$region <- str_replace_all(enrollment$region, clean_paste(middleEast), "Middle East")
+enrollment$region <- str_replace_all(enrollment$region, clean_paste(asia), "Asia")
+enrollment$region <- str_replace_all(enrollment$region, clean_paste(europe), "Europe")
+enrollment$region <- str_replace_all(enrollment$region, clean_paste(latinAmerica), "Latin America")
+enrollment$region <- str_replace_all(enrollment$region, clean_paste(africa), "Africa")
+enrollment %>% group_by(region) %>% summarize(n = length(`_Country_of_Citizenship_`)) %>% arrange(desc(n))
+
+
+# Breakdown of ethnicities by quarter
+# Number of students from a country/region by quarter_date
+ethnic_breakdown <- enrollment %>% mutate(quarter_datetime = as.Date(parse_date_time(quarter_date, c('mdy')))) %>% group_by(`_Country_of_Citizenship_`, region, quarter_date, quarter_datetime) %>% summarize(n = length(`_Student_Number_`)) %>% arrange(quarter_datetime)
+
+```
+
+
+
+# Market data: Recoding Quarters to Dates
+```{r, message=FALSE,warning=FALSE}
+market_10 <- read_csv("Market_Results_10_encrypt.csv")
+market_11 <- read_csv("Market_Results_11_encrypt.csv")
+market_12 <- read_csv("Market_Results_12_encrypt.csv")
+
+# Combining all market results via rbind
+names(market_10)
+names(market_11)
+names(market_12)
+market_11 <- market_11[,-9]
+market_12 <- market_12[,-c(2, 10)]
+
+
+market_10$quarter_date <- recode(market_10$Quarter,
+       "AIEP_FA17" = "October 1, 2017",
+       "AIEP_FA18" = "October 1, 2018",
+       "AIEP_SP18" = "January 1, 2018",
+       "AIEP_SU18A" = "July 31, 2018",
+       "AIEP_SU18B" = "August 1, 2018",
+       "AIEP_WI18" = "January 1, 2018"
+       )
+
+market_11$quarter_date <- recode(market_11$Quarter,
+       "AIEP_SU16C" = "August 1, 2016",
+       "AIEP_SU17C" = "August 1, 2017"
+       )
+
+market_12$quarter_date <- recode(market_12$Quarter,
+       "AIEP_FA16" = "October 1, 2016",
+       "AIEP_SP17" = "April 1, 2017",
+       "AIEP_SU17AB" = "July 31, 2017",
+       "AIEP_WI17" = "January 1, 2017"
+       )
+
+# Checking for number of unique student IDs
+length(unique(market_10$`_Student_ID_`)); dim(market_10)[1] # potential duplicates, and multiple NULL values
+length(unique(market_11$`_Student_ID_`)); dim(market_11)[1] # no duplicates
+length(unique(market_12$`_Student_ID_`)); dim(market_12)[1] # potential duplicates, maybe NULL values?
+
+
+# Checking for potential duplicate entries
+market_10 %>% select(`_Student_ID_`, Quarter) %>% group_by(`_Student_ID_`, Quarter) %>% count(`_Student_ID_`, sort = TRUE)
+m10dupes <- market_10 %>% select(`_Student_ID_`, Quarter) %>% group_by(`_Student_ID_`, Quarter) %>% count(`_Student_ID_`, sort = TRUE) %>% subset(n == 2) %>% pull(`_Student_ID_`)
+market_10_notNull <- market_10 %>% filter(`_Student_ID_` != "NULL") %>% distinct(`_Student_ID_`, .keep_all = TRUE)
+market_10_Null <- market_10 %>% filter(`_Student_ID_` == "NULL")
+market_10 <- rbind(market_10_notNull, market_10_Null) 
+
+market_11 %>% select(`_Student_ID_`, Quarter) %>% group_by(`_Student_ID_`, Quarter) %>% count(`_Student_ID_`, sort = TRUE)
+market_11 %>% select(`_Student_ID_`, Quarter) %>% group_by(`_Student_ID_`) %>% filter(length(`_Student_ID_`) != 1) %>% count(`_Student_ID_`, sort = TRUE) # no duplicates
+
+market_12 %>% select(`_Student_ID_`, Quarter) %>% group_by(`_Student_ID_`, Quarter) %>% count(`_Student_ID_`, sort = TRUE) 
+m12dupes <- market_12 %>% select(`_Student_ID_`, Quarter) %>% group_by(`_Student_ID_`) %>% filter(length(`_Student_ID_`) != 1) %>% count(`_Student_ID_`, sort = TRUE) %>% subset(n == 2) %>% pull(`_Student_ID_`)
+market_12 %>% filter(str_detect(`_Student_ID_`, clean_paste(m12dupes))) %>% select(`_Student_ID_`, Quarter) # the duplicate entries mean that students enrolled in more than a single quarter
+
+# Checking for potential duplicate entries
+# market_10 %>% select(`_Student_ID_`, Quarter) %>% group_by(`_Student_ID_`, Quarter) %>% count(`_Student_ID_`, sort = TRUE)
+# market_11 %>% select(`_Student_ID_`, Quarter) %>% group_by(`_Student_ID_`, Quarter) %>% count(`_Student_ID_`, sort = TRUE) 
+# market_12 %>% select(`_Student_ID_`, Quarter) %>% group_by(`_Student_ID_`, Quarter) %>% count(`_Student_ID_`, sort = TRUE) 
+# market_10 %>% select(`_Student_ID_`, Quarter) %>% filter(`_Student_ID_` == "NULL") %>% count()
+# market_11 %>% select(`_Student_ID_`, Quarter) %>% filter(`_Student_ID_` == "NULL") %>% count()
+# market_12 %>% select(`_Student_ID_`, Quarter) %>% filter(`_Student_ID_` == "NULL") %>% count()
+# 
+# dim(market_10)
+# dim(market_11)
+# dim(market_12)
+market_results <- rbind(market_10, market_11, market_12)
+names(market_results)[1] <- names(enrollment)[1]
+names(market_results)
+
+
+market_join <- inner_join(market_results, enrollment, by = names(market_results)[1]) # gets rid of NULL StudentIDs since we dk which enrollment record matches theirs
+
+# Cleaning goals BEFORE studying at ALC
+table(market_join$`_What_did_you_do_before_studying_at_ALC__`)
+market_join$`_What_did_you_do_before_studying_at_ALC__` <- recode(market_join$`_What_did_you_do_before_studying_at_ALC__`,
+       "(student,working)" = "student,working",
+       "student,working" = "student,working",
+       "student" = "student",
+       "working" = "working",
+       "other" = "other",
+       .default = NA_character_
+       )
+table(market_join$`_What_did_you_do_before_studying_at_ALC__`)
+
+# Cleaning goals AFTER studying at ALC
+table(market_join$`_What_will_you_do_after_the_ALC_program_ends__`)
+market_join$`_What_will_you_do_after_the_ALC_program_ends__` <- recode(market_join$`_What_will_you_do_after_the_ALC_program_ends__`,
+       "(4-year college,return to home country)" = "4-year college",
+       "(2-year college,MA or PhD)" = "2-year college",
+       "(UNEX certificate,return to home country)" = "UNEX certificate",
+       "2-year college" = "2-year college",
+       "4-year college" = "4-year college",
+       "MA or PhD" = "MA or PhD",
+       "return to home country" = "return to home country",
+       "UNEX certificate" = "UNEX certificate",
+       .default = NA_character_
+       )
+table(market_join$`_What_will_you_do_after_the_ALC_program_ends__`)
+
+# Cleaning english test students plan to take within six months
+table(market_join$`_Which_English_test_do_you_plan_to_take_in_the_next_6_months__`)
+market_join$`_Which_English_test_do_you_plan_to_take_in_the_next_6_months__` <- recode(market_join$`_Which_English_test_do_you_plan_to_take_in_the_next_6_months__`,
+                                                                                         "(iBT-TOEFL,IELTS)" = "iBT-TOEFL,IELTS",
+                                                                                         "(iBT-TOEFL,IELTS,TOEIC)" = "iBT-TOEFL,IELTS,TOEIC",
+                                                                                         "(iBT-TOEFL,TOEIC)" = "iBT-TOEFL,TOEIC",
+                                                                                         "(IELTS,TOEIC)" = "IELTS,TOEIC",
+                                                                                         "none" = "none",
+                                                                                         "NULL" = "none"
+                                                                                       )
+
+# Cleaning student's choice of major
+table(market_join$`_What_major_or_field_do_you_plan_to_study_after_you_complete_your_ALC_program__`)
+market_join$major_groups <- recode(market_join$`_What_major_or_field_do_you_plan_to_study_after_you_complete_your_ALC_program__`,
+                                      "Business/Finance,Medicine/Biology" = "Business/Finance",
+                                      "Other: International Relations" = "Communications",
+                                      "Other: Public Relations" = "Communications",
+                                      "Other: Marketing" = "Communications",
+                                      "Other: Marketing, Social Media, Public Relations" = "Communications",
+                                      "Other: Communications" = "Communications",
+                                      "Other: Communications/Journalism" = "Communications",
+                                      "Other: Journalism" = "Communications",
+                                      "Other: Interpretation/Translation" = "Communications",
+                                      "Entertainment/Film/Media" = "Entertainment",
+                                      "Media/Film/TV" = "Entertainment",
+                                      "Other: Mathematics" = "STEM",
+                                      "Engineering" = "STEM",
+                                      "Engineering,Chemistry/Physics" = "STEM",
+                                      "Other: Computer Science" = "STEM",
+                                      "Other: Mathematics" = "STEM",
+                                      "Chemistry/Physics" = "STEM",
+                                      "Other: Statistics" = "STEM",
+                                      "Other: Computer Science" = "STEM",
+                                      "Computer Science" = "STEM",
+                                      "Engineering,Art/Architecture/Design" = "STEM",
+                                      "(Engineering,Education)" = "STEM",
+                                      "Other: Psychology" = "Psychology",
+                                      "Other: Literature" = "English/Writing/Education",
+                                      "Other: English" = "English/Writing/Education",
+                                      "English/Literature/Education" = "English/Writing/Education",
+                                      "Business/Finance,Law" = "Business/Finance",
+                                      "Business/Finance,Art/Architecture/Design" = "Business/Finance",
+                                      "Business/Finance,Education" = "Business/Finance",
+                                      "Business/Finance,Education,Other: English" = "Business/Finance",
+                                      "Business/Finance,Other: Real Estate" = "Business/Finance",
+                                      "(Business/Finance,Medicine/Biology)" = "Business/Finance",
+                                      "Business/Finance/Acctg/Mkt/Mgmt" = "Business/Finance",
+                                      "Business/Finance,Engineering" = "Business/Finance",
+                                      "Business/Finance,Other: Computer Programming" = "Business/Finance",
+                                      "(Business/Finance,Law)" = "Business/Finance",
+                                      "(Business/Finance,Art/Architecture/Design)" = "Business/Finance",
+                                      "(Business/Finance/Acctg/Mkt/Mgmt,Computer Science)" = "Business/Finance",
+                                      "Business/Finance,Engineering,Art/Architecture/Design" = "Business/Finance",
+                                      "Other: Economics" = "Business/Finance",
+                                      "Other: Foreign Trade" = "Business/Finance",
+                                      "Other: Political Science" = "Politics/Policy",
+                                      "Other: Public Policy" = "Politics/Policy",
+                                      "Other: Global Politics" = "Politics/Policy",
+                                      "Other: Environmental Politics" = "Politics/Policy",
+                                      "Other: Politics and Communication Science" = "Politics/Policy",
+                                      "(Art/Architecture/Design,Education)" = "Art/Architecture/Design",
+                                      "Art/Architecture" = "Art/Architecture/Design",
+                                      "Art/Architecture/Design,Other: Journalism" = "Art/Architecture/Design",
+                                      "Law,Education" = "Law",
+                                      "(Law,Other)" = "Law",
+                                      "(Medicine/Biology,Education)" = "Medicine/Biology",
+                                      "Medicine/Biology" = "Medicine/Biology",
+                                      "Other: Entertainment/Film/Media" = "Entertainment",
+                                      "Other: Sports and Performance Psychology" = "Psychology",
+                                      "Other: Pharmaceutics" = "Medicine/Biology",
+                                      "Other: Nutrition" = "Medicine/Biology",
+                                      "Other: Hospitality Management" = "Business/Finance",
+                                      "Other: Climatology" = "STEM",
+                                      "Other: Informational Technology" = "STEM",
+                                      "Other: Music" = "Art/Architecture/Design",
+                                      "Other: Fashion" = "Entertainment",
+                                      "NULL" = NULL
+                                      
+)
+
+table(market_join$major_groups)
+market_join$major_groups[which(str_detect(market_join$major_groups, "Other"))] <- "Other"
+market_join$major_groups[market_join$major_groups == "Education"] <- "English/Writing/Education"
+```
+
+
+
+# Placement data: Recoding Quarters to Dates
+```{r, message = FALSE, warning=FALSE}
+placement_6 <- read_csv("Placement_6_encrypt.csv")
+placement_8 <- read_csv("Placement_8_encrypt.csv")
+
+names(placement_6)
+names(placement_8) # this includes Reading and Grammer scores
+
+# Recoding dates
+placement_6$quarter_date <- recode(placement_6$Quarter,
+       "2017Fall" = "October 1, 2017",
+       "2017Spring" = "April 1, 2017",
+       "2017SummerAB" = "July 31, 2017",
+       "2017SummerC" = "August 1, 2017",
+       "2018Fall" = "October 1, 2018",
+       "2018Spring" = "April 1, 2018",
+       "2018SummerAB" = "July 31, 2018",
+       "2018SummerC" = "August 1, 2018"
+       )
+placement_8$quarter_date <- recode(placement_8$Quarter,
+       "2016Fall_ALCPT"  = "October 1, 2016",
+       "2016SummerC_ALCPT" = "July 31, 2016",
+       "2017Winter_ALCPT" = "January 1, 2017"
+       )
+placements <- rbind(placement_6, placement_8[,-c(7,8)])
+names(placements)[1] <- names(enrollment)[1]
+placement_join <- inner_join(enrollment, placements, by = names(placements)[1])
+
+# Fixing NULL values from placements
+placement_join$Total[placement_join$Total == "NULL"] <- NA
+placement_join$EnglishUse[placement_join$EnglishUse == "NULL"] <- NA
+placement_join$Listening[placement_join$Listening == "NULL"] <- NA
+placement_join$Composition[placement_join$Composition == "NULL"] <- NA
+
+# Converting to numeric values for analysis
+placement_join$EnglishUse <- as.numeric(placement_join$EnglishUse)
+placement_join$Listening <- as.numeric(placement_join$Listening)
+placement_join$Composition <- as.numeric(placement_join$Composition)
+placement_join$Total <- as.numeric(placement_join$Total)
+
+# Replacing 0 values with NA, assuming these students didn't take the test
+placement_join$Total[placement_join$Total == 0] <- NA
+placement_join$EnglishUse[placement_join$EnglishUse == 0] <- NA
+placement_join$Listening[placement_join$Listening == 0] <- NA
+placement_join$Composition[placement_join$Composition == 0] <- NA
+
+write.csv(ethnic_breakdown, "Ethnic_Breakdown.csv")
+write.csv(market_join, "Market_Results.csv")
+write.csv(placement_join, "Placement.csv")
+write.csv(enrollment, "Enrollment.csv")
+
+hist(as.numeric(enrollment$Age))
+```
+
+
+
+
+
+
